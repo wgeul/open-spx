@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Masked RNN architecture for fitted S&amp;P 500 replication weights</title>
+  <desc id="desc">Diagram showing returns, prior weights, and active mask entering a GRU, producing bounded residual adjustments around prior weights, masked softmax normalized weights, replicated return, and three training losses.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#333" />
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #333333; stroke-width: 2; rx: 10; }
+      .input { fill: #eef6ff; stroke: #276fbf; }
+      .model { fill: #f4f1ff; stroke: #6554c0; }
+      .constraint { fill: #fff6e6; stroke: #c47f00; }
+      .output { fill: #ecfff1; stroke: #188038; }
+      .loss { fill: #fff0f0; stroke: #b3261e; }
+      .text { font-family: Arial, Helvetica, sans-serif; fill: #1f1f1f; font-size: 20px; }
+      .small { font-family: Arial, Helvetica, sans-serif; fill: #333333; font-size: 15px; }
+      .tiny { font-family: Arial, Helvetica, sans-serif; fill: #555555; font-size: 13px; }
+      .title { font-family: Arial, Helvetica, sans-serif; fill: #111111; font-size: 28px; font-weight: 700; }
+      .arrow { stroke: #333333; stroke-width: 2.3; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #777777; stroke-width: 2; fill: none; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="720" fill="#fbfbfd" />
+  <text x="600" y="44" text-anchor="middle" class="title">Masked RNN for Prior-Constrained SPX Weight Fitting</text>
+  <text x="600" y="72" text-anchor="middle" class="small">One regularized explanation of published index returns, not recovered official S&amp;P weights</text>
+
+  <rect x="45" y="115" width="245" height="95" class="box input" />
+  <text x="167" y="150" text-anchor="middle" class="text">Constituent returns</text>
+  <text x="167" y="178" text-anchor="middle" class="small">r[t, i]</text>
+  <text x="167" y="198" text-anchor="middle" class="tiny">price-derived daily returns</text>
+
+  <rect x="45" y="250" width="245" height="95" class="box input" />
+  <text x="167" y="285" text-anchor="middle" class="text">Prior weights</text>
+  <text x="167" y="313" text-anchor="middle" class="small">p[t, i]</text>
+  <text x="167" y="333" text-anchor="middle" class="tiny">supplied prior weights</text>
+
+  <rect x="45" y="385" width="245" height="95" class="box input" />
+  <text x="167" y="420" text-anchor="middle" class="text">Active mask</text>
+  <text x="167" y="448" text-anchor="middle" class="small">m[t, i]</text>
+  <text x="167" y="468" text-anchor="middle" class="tiny">point-in-time membership</text>
+
+  <rect x="365" y="205" width="245" height="150" class="box model" />
+  <text x="487" y="242" text-anchor="middle" class="text">Masked GRU</text>
+  <text x="487" y="272" text-anchor="middle" class="small">input = [r·m, p·m, m]</text>
+  <text x="487" y="302" text-anchor="middle" class="small">hidden state h[t]</text>
+  <text x="487" y="330" text-anchor="middle" class="tiny">smooth nonlinear residual parameterization</text>
+
+  <rect x="670" y="118" width="245" height="110" class="box constraint" />
+  <text x="792" y="154" text-anchor="middle" class="text">Bounded residual</text>
+  <text x="792" y="184" text-anchor="middle" class="small">δ = tanh(W h) · log(F)</text>
+  <text x="792" y="207" text-anchor="middle" class="tiny">F = max adjustment factor</text>
+
+  <rect x="670" y="270" width="245" height="125" class="box constraint" />
+  <text x="792" y="307" text-anchor="middle" class="text">Prior + mask + softmax</text>
+  <text x="792" y="337" text-anchor="middle" class="small">logits = log(p) + δ</text>
+  <text x="792" y="361" text-anchor="middle" class="small">inactive logits = -∞</text>
+  <text x="792" y="383" text-anchor="middle" class="tiny">non-negative weights sum to one</text>
+
+  <rect x="970" y="270" width="190" height="125" class="box output" />
+  <text x="1065" y="306" text-anchor="middle" class="text">Fitted weights</text>
+  <text x="1065" y="336" text-anchor="middle" class="small">w[t, i]</text>
+  <text x="1065" y="361" text-anchor="middle" class="tiny">effective replication weights</text>
+  <text x="1065" y="383" text-anchor="middle" class="tiny">not official index weights</text>
+
+  <rect x="970" y="460" width="190" height="95" class="box output" />
+  <text x="1065" y="494" text-anchor="middle" class="text">Replicated return</text>
+  <text x="1065" y="523" text-anchor="middle" class="small">Σ w[t,i] r[t,i]</text>
+
+  <rect x="640" y="500" width="270" height="145" class="box loss" />
+  <text x="775" y="532" text-anchor="middle" class="text">Training objective</text>
+  <text x="775" y="563" text-anchor="middle" class="small">tracking loss vs SPX return</text>
+  <text x="775" y="590" text-anchor="middle" class="small">+ log-ratio prior penalty</text>
+  <text x="775" y="617" text-anchor="middle" class="small">+ temporal smoothness penalty</text>
+
+  <rect x="350" y="500" width="220" height="95" class="box loss" />
+  <text x="460" y="535" text-anchor="middle" class="text">Target</text>
+  <text x="460" y="564" text-anchor="middle" class="small">published SPX return</text>
+
+  <path d="M290 162 C320 162, 330 230, 365 242" class="arrow" />
+  <path d="M290 298 L365 280" class="arrow" />
+  <path d="M290 432 C320 432, 330 330, 365 318" class="arrow" />
+  <path d="M610 280 L670 174" class="arrow" />
+  <path d="M792 228 L792 270" class="arrow" />
+  <path d="M915 333 L970 333" class="arrow" />
+  <path d="M1065 395 L1065 460" class="arrow" />
+  <path d="M970 508 C930 508, 925 572, 910 572" class="arrow" />
+  <path d="M570 548 L640 548" class="arrow" />
+  <path d="M1065 555 C1040 650, 900 665, 800 645" class="dash" />
+  <path d="M790 395 C780 430, 780 465, 785 500" class="dash" />
+  <path d="M793 228 C905 205, 1018 222, 1060 270" class="dash" />
+
+  <text x="600" y="690" text-anchor="middle" class="tiny">Inputs are rolling windows. The fitted solution is constrained by priors and masks, but the inverse problem remains underidentified.</text>
+</svg>
