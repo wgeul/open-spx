@@ -1,6 +1,7 @@
 import pandas as pd
 
 from openspx import (
+    DEFAULT_CONSTITUENTS_URL,
     apply_ticker_mappings,
     apply_ticker_mappings_to_membership,
     constituent_membership_matrix,
@@ -10,6 +11,11 @@ from openspx import (
     tickers_for_period,
 )
 
+
+def test_default_constituents_source_points_to_fja05680_sp500():
+    assert DEFAULT_CONSTITUENTS_URL.startswith(
+        "https://raw.githubusercontent.com/fja05680/sp500/master/"
+    )
 
 def test_load_historical_constituents_prefers_long_date_ticker_format(tmp_path):
     source = tmp_path / "constituents.csv"

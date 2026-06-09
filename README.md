@@ -1,8 +1,23 @@
 # open-spx
 
-Open Python tooling for approximate bottom-up replication and attribution of S&P 500 price-index returns from user-provided CSV inputs.
+Open Python tooling for approximate bottom-up replication and contribution analysis of S&P 500 price-index returns from user-provided CSV inputs.
 
-`open-spx` builds a point-in-time membership matrix from historical constituent snapshots, loads constituent close prices and market-cap priors from local CSV files, computes daily return contributions, compares the replication against a user-provided S&P 500 price-index series, and can fit a constrained masked RNN adjustment layer against that index return series.
+## Motivation
+
+This project started from a simple question raised by recent finance discussions about S&P 500 concentration: if an increasing share of index returns is contributed by a smaller share of constituents, where can you inspect those return contributions directly? Which names are actually carrying the index, and how does that change through time?
+
+After looking for public tooling around this question, I did not find a clean source that exposed point-in-time S&P 500 return contributions. That gap exists because S&P 500 contribution analysis is not just a stock-return problem. It is an index-contribution problem. A stock's contribution depends on its return, its point-in-time index membership, and its point-in-time index weight. The S&P U.S. index methodology describes the indices as float-adjusted market-cap weighted, with index levels maintained through divisor mechanics around constituent and corporate-action changes ([S&P Dow Jones Indices methodology](https://www.spglobal.com/spdji/en/methodology/article/sp-us-indices-methodology/)). Official index weights are not publicly available as a complete point-in-time history, and exact float adjustments, divisor changes, and corporate-action treatments are not fully observable from free public data.
+
+That creates several practical problems for anyone trying to explain S&P 500 performance from the bottom up:
+
+| Topic | Challenge | What `open-spx` does | What it does not resolve |
+| --- | --- | --- | --- |
+| Daily constituent history | The index changes through additions, deletions, mergers, spin-offs, ticker changes, and share-class events. A static current ticker list cannot explain a historical period cleanly. | Builds a point-in-time membership matrix from historical constituent snapshots and optional ticker mappings. | Does not certify that every index event is represented exactly as implemented by the official index. |
+| Price-index returns | The S&P 500 price index excludes ordinary dividends, so price-index and total-return inputs should not be mixed casually. | Computes constituent returns from close-price CSV inputs and compares them with a supplied S&P 500 price-index series. | Does not model total-return index contribution or dividend reinvestment effects. |
+| Corporate actions and index mechanics | Splits, special dividends, spin-offs, mergers, index additions/deletions, float changes, and divisor adjustments can all affect official index contribution in ways that simple `weight * return` cannot fully capture. | Makes the approximation explicit, produces prior and fitted contribution files, and surfaces diagnostic gaps between prior exposure and fitted exposure. | Does not reproduce official divisor mechanics, investable weight factors, or corporate-action treatment. |
+| Underidentified weights | One daily index return cannot uniquely identify hundreds of constituent weights. | Fits a regularized, prior-constrained RNN weight path as one smooth explanation of the supplied return series. | Does not recover official constituent weights or prove that fitted weights match official S&P weights. |
+
+`open-spx` addresses part of this gap by making the approximation explicit and reproducible. It builds a point-in-time membership matrix from historical constituent snapshots, estimates time-varying prior weights from user-provided market-cap or shares-outstanding CSV inputs, computes daily return contributions, compares the replication against a user-provided S&P 500 price-index series, and optionally fits a constrained masked RNN adjustment layer against that index return series.
 
 The inferred weights are not official S&P Dow Jones Indices weights. They are model-implied effective replication weights fitted from the supplied inputs. Because each day provides one aggregate index return but hundreds of constituent weights, fitted weights are not uniquely identified. Treat them as diagnostics and approximations, not recovered official index data.
 
@@ -14,54 +29,54 @@ Final RNN tracking error is in-sample unless the user implements a holdout or wa
 
 ## Example Output
 
-The repository includes an example output set in `data/`. It is intended as a compact fixture for inspecting the shape of the generated CSV files and plot artifacts. The RNN metrics below are in-sample for this example and should be read as illustration, not independent validation of official S&P 500 weights.
+The repository includes an example output set in `data/`. It is intended as a compact fixture for inspecting the shape of the generated CSV files and plot artifacts. Do not treat example outputs as a data redistribution grant; for committed fixtures, prefer synthetic inputs or datasets that are clearly licensed for redistribution. The RNN metrics below are in-sample for this example and should be read as illustration, not independent validation of official S&P 500 weights. Prefer `replication_metrics_by_model.csv` when comparing the prior replication with the fitted layer.
 
-![SPX vs replicated SPX](data/spx_vs_replicated_spx.png)
+![SPX vs replicated SPX](docs/assets/spx_vs_replicated_spx.png)
 
 Example tracking metrics from `data/replication_metrics.csv`:
 
-| Metric | Value |
-| --- | ---: |
-| Mean tracking diff daily | 0.0006% |
-| Tracking error daily | 0.0264% |
+| Metric                    |   Value |
+| ------------------------- | ------: |
+| Mean tracking diff daily  | 0.0006% |
+| Tracking error daily      | 0.0264% |
 | Tracking error annualized | 0.4192% |
-| Observations | 853 |
+| Observations              |     853 |
 
 Latest rows from `data/replication_vs_sp500.csv`:
 
-| Date | SPX | Replicated SPX | Tracking diff |
-| --- | ---: | ---: | ---: |
-| 2026-05-22 | 7473.47 | 7507.82 | 0.0087% |
-| 2026-05-26 | 7519.12 | 7554.80 | 0.0148% |
-| 2026-05-27 | 7520.36 | 7557.08 | 0.0138% |
-| 2026-05-28 | 7563.63 | 7602.70 | 0.0283% |
-| 2026-05-29 | 7580.06 | 7617.60 | -0.0212% |
+| Date       |     SPX | Replicated SPX | Tracking diff |
+| ---------- | ------: | -------------: | ------------: |
+| 2026-05-22 | 7473.47 |        7507.82 |       0.0087% |
+| 2026-05-26 | 7519.12 |        7554.80 |       0.0148% |
+| 2026-05-27 | 7520.36 |        7557.08 |       0.0138% |
+| 2026-05-28 | 7563.63 |        7602.70 |       0.0283% |
+| 2026-05-29 | 7580.06 |        7617.60 |      -0.0212% |
 
 Largest cumulative positive contributors from `data/cumulative_top_return_contributors.csv`:
 
 | Ticker | Cumulative contribution |
-| --- | ---: |
-| NVDA | 10.7079% |
-| AAPL | 6.0406% |
-| AMZN | 4.6502% |
-| MSFT | 4.4345% |
-| AVGO | 3.8141% |
-| GOOGL | 3.3936% |
-| GOOG | 3.1410% |
-| META | 2.9343% |
+| ------ | ----------------------: |
+| NVDA   |                10.7079% |
+| AAPL   |                 6.0406% |
+| AMZN   |                 4.6502% |
+| MSFT   |                 4.4345% |
+| AVGO   |                 3.8141% |
+| GOOGL  |                 3.3936% |
+| GOOG   |                 3.1410% |
+| META   |                 2.9343% |
 
 Largest cumulative negative contributors from `data/cumulative_top_return_bleeders.csv`:
 
 | Ticker | Cumulative contribution |
-| --- | ---: |
-| PFE | -0.3972% |
-| MMC | -0.3377% |
-| UNH | -0.2707% |
-| NKE | -0.1742% |
-| MRNA | -0.1295% |
-| UPS | -0.1135% |
-| BMY | -0.1083% |
-| PEP | -0.1069% |
+| ------ | ----------------------: |
+| PFE    |                -0.3972% |
+| MMC    |                -0.3377% |
+| UNH    |                -0.2707% |
+| NKE    |                -0.1742% |
+| MRNA   |                -0.1295% |
+| UPS    |                -0.1135% |
+| BMY    |                -0.1083% |
+| PEP    |                -0.1069% |
 
 `data/largest_market_cap_difference_case.png` provides a second diagnostic plot for the ticker with the largest average market-cap-equivalent gap between the fitted exposure and prior.
 
@@ -83,7 +98,6 @@ Prepare local CSV inputs, then run:
 ```bash
 open-spx \
   --start 2024-01-01 \
-  --constituents data/constituents.csv \
   --index data/sp500_index.csv \
   --local-data-dir data/inputs \
   --out data/run
@@ -122,7 +136,7 @@ Accepted value column names include `Close`, `sp500_index`, `index`, or `level`.
 
 ### Historical Constituents
 
-The constituent file should be long form, with one row per date and ticker:
+The required constituent format is long form, with one row per date and ticker:
 
 ```csv
 date,ticker
@@ -132,11 +146,15 @@ date,ticker
 2024-01-02,C
 ```
 
-Snapshot-style CSVs with a date column and a comma-separated ticker list are also accepted and normalized internally.
+The default `--constituents` value points to [`fja05680/sp500`](https://github.com/fja05680/sp500), which describes itself as current and historical S&P 500 component lists since 1996 and is published under the MIT license. The upstream file is normalized internally from its snapshot format into the long format above.
+
+The default source is a useful open dataset, not an official constituent feed. Its README notes that updates use Wikipedia and other manual checks, that Wikipedia selected changes are not complete, that symbol counts are not always exactly 500, and that the earliest years may have missing symbols. Validate event coverage and ticker mappings before relying on a period for serious analysis.
+
+You can also pass your own local constituent CSV with `--constituents path/to/constituents.csv`.
 
 ### Constituent Prices
 
-By default, price files are read from `data/inputs/price/TICKER.csv`. Each file should contain a `Date` column and a `Close` column. A lowercase `price` column is also accepted.
+By default, price files are read from `data/inputs/price/TICKER.csv`. Each file should contain a `Date` column and a `Close` column. A lowercase `price` column is also accepted. If a file contains both `Close` and `Adj Close`, `Close` is used; adjusted-close series may include dividend adjustments and may not align cleanly with a price-index target.
 
 ```csv
 Date,Open,High,Low,Close,Volume
@@ -144,7 +162,7 @@ Date,Open,High,Low,Close,Volume
 2024-01-03,102.2,104.1,101.7,103.6,1456789
 ```
 
-Price files are filtered to each ticker's membership date range. Daily and lower-frequency files are accepted; lower-frequency observations are treated as dated anchors and forward-filled to daily frequency before alignment to index trading dates.
+Price files are filtered to each ticker's membership date range. Daily close data is strongly recommended for contribution analysis. Lower-frequency observations are accepted as dated anchors and forward-filled to daily frequency before alignment to index trading dates, but this can create artificial zero-return stretches and delayed jump returns on update days.
 
 ### Market Caps Or Shares Outstanding
 
@@ -169,7 +187,7 @@ If a market-cap series is provided, it is used directly as the prior exposure sc
 
 ## Ticker Mappings
 
-Ticker aliases can be supplied with `--ticker-mappings`, defaulting to `data/ticker_mappings.csv` when that file exists. The mapping target is the ticker used by your local CSV files for that date range. The file uses year-month-day date ranges:
+Ticker aliases can be supplied with `--ticker-mappings`, defaulting to `data/ticker_mappings.csv` when that file exists. The mapping target is the ticker used by your local CSV files in that date range; for stale constituent snapshots this may be the S&P replacement ticker or another symbol used in your prepared CSV inputs. The file uses year-month-day date ranges:
 
 ```csv
 source_ticker,target_ticker,start,end
@@ -198,15 +216,17 @@ market_caps_prior_timeseries.csv
 weights_prior_timeseries.csv
 replication_prior_weights.csv
 return_contributions_prior_weights.csv
-weights_rnn_inferred.csv
-market_caps_rnn_inferred_free_float.csv
-market_cap_differences_rnn_vs_prior.csv
+weights_model_implied.csv
+effective_exposures_model_fit.csv
+market_cap_equivalent_exposure_gap.csv
 returns.csv
 return_contributions.csv
 cumulative_top_return_contributors.csv
 cumulative_top_return_bleeders.csv
 replication_vs_sp500.csv
 replication_metrics.csv
+replication_metrics_by_model.csv
+anomaly_report.csv
 input_usage_report.csv
 spx_vs_replicated_spx.png
 largest_market_cap_difference_case.png
@@ -216,14 +236,19 @@ largest_market_cap_difference_case.png
 
 `replication_vs_sp500.csv` includes `sp500_return`, `sp500_index`, `replicated_return`, `replicated_index`, and `tracking_diff`.
 
-`weights_rnn_inferred.csv` contains close-of-day fitted weights. `return_contributions.csv` is indexed by return date and applies the prior close's fitted weights to that day's constituent returns.
+`replication_metrics_by_model.csv` places prior market-cap weights and RNN model-implied weights side by side. The RNN row is an ex-post in-sample fit; the prior row has no fitted layer.
 
-`market_caps_prior_timeseries.csv` is the market-cap prior used for weight construction. `market_cap_differences_rnn_vs_prior.csv` compares model-implied market-cap-equivalent exposure with that prior and is intended as a diagnostic.
+`weights_model_implied.csv` contains close-of-day model-implied effective weights. The RNN is trained over the full requested window, so these weights are an ex-post smoothing solution. They should not be interpreted as weights that would have been known on the date shown. `return_contributions.csv` is indexed by return date and applies the prior close's fitted weights to that day's constituent returns.
+
+`market_caps_prior_timeseries.csv` is the market-cap prior used for weight construction. `effective_exposures_model_fit.csv` scales model-implied weights to the aggregate prior market-cap level. `market_cap_equivalent_exposure_gap.csv` compares that model-implied effective exposure with the prior and is intended as a diagnostic, not as observed free-float market capitalization.
+
+`anomaly_report.csv` flags large single-name returns, membership transitions, and large model-vs-prior exposure gaps. These rows are starting points for data-quality review: split handling, special dividends, spin-offs, stale shares, stale market caps, ticker mappings, and other input issues can all masquerade as contribution effects.
 
 ## Python API
 
 ```python
 from openspx import (
+    DEFAULT_CONSTITUENTS_URL,
     constituent_membership_matrix,
     load_historical_constituents,
     load_member_data_for_membership,
@@ -236,7 +261,7 @@ from openspx import (
 )
 
 start = "2024-01-01"
-constituents = load_historical_constituents("data/constituents.csv")
+constituents = load_historical_constituents(DEFAULT_CONSTITUENTS_URL)
 official = load_sp500_index("data/sp500_index.csv", start=start)
 membership = constituent_membership_matrix(constituents, official.index)
 ranges = membership_date_ranges(membership)

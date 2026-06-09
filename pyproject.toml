@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "open-spx"
 version = "0.1.0"
-description = "Open Python code and data for reconstructing S&P 500 returns from constituents, estimated weights, returns, and contribution attribution."
+description = "Open Python code and data for reconstructing S&P 500 returns from constituents, estimated weights, returns, and contribution analysis."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

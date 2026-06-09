@@ -1,5 +1,5 @@
 from .constituents import (
-    DEFAULT_CONSTITUENTS_PATH,
+    DEFAULT_CONSTITUENTS_URL,
     apply_ticker_mappings,
     apply_ticker_mappings_to_membership,
     constituent_membership_matrix,
@@ -32,7 +32,7 @@ from .rnn import (
 __version__ = "0.1.0"
 
 __all__ = [
-    "DEFAULT_CONSTITUENTS_PATH",
+    "DEFAULT_CONSTITUENTS_URL",
     "InputUsageReport",
     "MissingInputDataError",
     "MaskedWeightRNN",

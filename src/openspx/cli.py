@@ -11,6 +11,7 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from .constituents import (
+    DEFAULT_CONSTITUENTS_URL,
     apply_ticker_mappings_to_membership,
     constituent_membership_matrix,
     load_historical_constituents,
@@ -77,30 +78,30 @@ def write_comparison_plot(comparison, path: Path) -> None:
     plt.close(fig)
 
 
-def ticker_with_largest_average_market_cap_difference(market_cap_differences):
+def ticker_with_largest_average_market_cap_difference(market_cap_equivalent_exposure_gap):
     """Return ticker with largest mean absolute market-cap difference."""
-    numeric_differences = market_cap_differences.apply(pd.to_numeric, errors="coerce")
+    numeric_differences = market_cap_equivalent_exposure_gap.apply(pd.to_numeric, errors="coerce")
     mean_abs_difference = numeric_differences.abs().mean(axis=0).dropna()
     if mean_abs_difference.empty:
-        raise ValueError("market_cap_differences must contain at least one non-null value")
+        raise ValueError("market_cap_equivalent_exposure_gap must contain at least one non-null value")
     return mean_abs_difference.idxmax()
 
 
 def write_market_cap_difference_plot(
     prior_market_caps,
     inferred_market_caps,
-    market_cap_differences,
+    market_cap_equivalent_exposure_gap,
     path: Path,
     prior_label: str,
 ) -> str:
     """Plot prior vs inferred market-cap-equivalent exposure for largest gap."""
-    ticker = ticker_with_largest_average_market_cap_difference(market_cap_differences)
+    ticker = ticker_with_largest_average_market_cap_difference(market_cap_equivalent_exposure_gap)
     plot_data = (
         prior_market_caps[[ticker]]
         .rename(columns={ticker: prior_label})
         .join(
             inferred_market_caps[[ticker]].rename(
-                columns={ticker: "Market Cap Free Float Inferred"}
+                columns={ticker: "Model-Implied Effective Exposure"}
             ),
             how="outer",
         )
@@ -110,7 +111,7 @@ def write_market_cap_difference_plot(
         raise ValueError(f"No overlapping market-cap data to plot for {ticker}")
 
     prior = plot_data[prior_label]
-    inferred = plot_data["Market Cap Free Float Inferred"]
+    inferred = plot_data["Model-Implied Effective Exposure"]
     mean_difference = (inferred - prior).mean()
     mean_abs_pct = ((inferred - prior).abs() / prior.replace(0.0, float("nan"))).mean()
 
@@ -125,7 +126,7 @@ def write_market_cap_difference_plot(
     ax.plot(
         plot_data.index,
         inferred,
-        label="Market Cap Free Float Inferred",
+        label="Model-Implied Effective Exposure",
         color="#d62728",
         linewidth=1.8,
     )
@@ -199,6 +200,82 @@ def cumulative_contributor_table(contributions, tickers):
     )
     return result
 
+def tracking_metrics_by_model(prior_comparison, fitted_comparison):
+    rows = []
+    for model, comparison, fitted_layer in (
+        ("prior_market_cap_weights", prior_comparison, "no"),
+        ("rnn_model_implied_weights", fitted_comparison, "yes_ex_post_in_sample"),
+    ):
+        metrics = tracking_metrics(comparison)
+        rows.append(
+            {
+                "model": model,
+                "daily_tracking_error": metrics.get("tracking_error_daily"),
+                "annualized_tracking_error": metrics.get("tracking_error_annualized"),
+                "mean_tracking_diff_daily": metrics.get("mean_tracking_diff_daily"),
+                "observations": metrics.get("observations"),
+                "fitted_layer": fitted_layer,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_anomaly_report(
+    returns,
+    membership,
+    exposure_gap_pct,
+    large_return_threshold: float = 0.15,
+    exposure_gap_threshold: float = 25.0,
+):
+    records = []
+
+    large_returns = returns.stack().dropna()
+    large_returns = large_returns[large_returns.abs() >= large_return_threshold]
+    for (date, ticker), value in large_returns.items():
+        records.append(
+            {
+                "Date": date,
+                "Ticker": ticker,
+                "anomaly_type": "large_single_name_return",
+                "value": float(value),
+                "note": f"absolute return >= {large_return_threshold:.0%}",
+            }
+        )
+
+    membership_changes = membership.astype(bool).astype(int).diff().fillna(0)
+    transitions = membership_changes.stack()
+    transitions = transitions[transitions != 0]
+    for (date, ticker), value in transitions.items():
+        records.append(
+            {
+                "Date": date,
+                "Ticker": ticker,
+                "anomaly_type": "membership_transition",
+                "value": int(value),
+                "note": "entered" if value > 0 else "exited",
+            }
+        )
+
+    gaps = exposure_gap_pct.stack().dropna()
+    gaps = gaps[gaps.abs() >= exposure_gap_threshold]
+    for (date, ticker), value in gaps.items():
+        records.append(
+            {
+                "Date": date,
+                "Ticker": ticker,
+                "anomaly_type": "model_vs_prior_exposure_gap_pct",
+                "value": float(value),
+                "note": f"absolute fitted-vs-prior gap >= {exposure_gap_threshold:.1f}%",
+            }
+        )
+
+    columns = ["Date", "Ticker", "anomaly_type", "value", "note"]
+    if not records:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(records, columns=columns).sort_values(
+        ["Date", "Ticker", "anomaly_type"]
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -210,8 +287,11 @@ def main() -> None:
     parser.add_argument("--out", default="data")
     parser.add_argument(
         "--constituents",
-        default="data/constituents.csv",
-        help="Path to a historical constituents CSV in date,ticker format.",
+        default=DEFAULT_CONSTITUENTS_URL,
+        help=(
+            "Path or URL to historical constituents in long date,ticker format. "
+            "The default uses fja05680/sp500 and normalizes it to that format."
+        ),
     )
     parser.add_argument(
         "--ticker-mappings",
@@ -427,18 +507,18 @@ def main() -> None:
         columns=weights.columns,
         fill_value=False,
     ).astype(bool)
-    inferred_free_float_market_caps = weights.mul(total_market_cap, axis=0).where(
+    model_implied_effective_exposures = weights.mul(total_market_cap, axis=0).where(
         active_weights_mask
     )
     prior_market_caps_for_weights = market_caps.reindex(
         index=weights.index,
         columns=weights.columns,
     ).where(active_weights_mask)
-    market_cap_differences = (
-        inferred_free_float_market_caps - prior_market_caps_for_weights
+    market_cap_equivalent_exposure_gap = (
+        model_implied_effective_exposures - prior_market_caps_for_weights
     )
-    market_cap_difference_pct = (
-        market_cap_differences
+    market_cap_equivalent_exposure_gap_pct = (
+        market_cap_equivalent_exposure_gap
         .div(prior_market_caps_for_weights.replace(0.0, float("nan")))
         .mul(100.0)
     )
@@ -449,7 +529,7 @@ def main() -> None:
         return stacked
 
     market_cap_prior_label = "Market Cap Prior"
-    market_cap_difference_pct_label = "Market Cap Difference (%) of Prior"
+    market_cap_equivalent_exposure_gap_pct_label = "Exposure Gap (%) of Prior"
 
     market_cap_difference_table = (
         long_market_cap_series(
@@ -459,20 +539,20 @@ def main() -> None:
         .to_frame()
         .join(
             long_market_cap_series(
-                inferred_free_float_market_caps,
-                "Market Cap Free Float Inferred",
+                model_implied_effective_exposures,
+                "Model-Implied Effective Exposure",
             )
         )
         .join(
             long_market_cap_series(
-                market_cap_differences,
-                "Market Cap Difference",
+                market_cap_equivalent_exposure_gap,
+                "Exposure Gap",
             )
         )
         .join(
             long_market_cap_series(
-                market_cap_difference_pct,
-                market_cap_difference_pct_label,
+                market_cap_equivalent_exposure_gap_pct,
+                market_cap_equivalent_exposure_gap_pct_label,
             )
         )
         .reset_index()
@@ -492,6 +572,16 @@ def main() -> None:
         comparison["replicated_return"] - comparison["sp500_return"]
     )
     metrics = tracking_metrics(comparison)
+    prior_comparison = prior_replicated.join(official, how="inner")
+    prior_comparison["tracking_diff"] = (
+        prior_comparison["replicated_return"] - prior_comparison["sp500_return"]
+    )
+    metrics_by_model = tracking_metrics_by_model(prior_comparison, comparison)
+    anomaly_report = build_anomaly_report(
+        returns,
+        membership.reindex(index=returns.index, columns=returns.columns, fill_value=False),
+        market_cap_equivalent_exposure_gap_pct,
+    )
 
     constituents.to_csv(out_dir / "historical_constituents.csv", index=False)
     ranges.to_csv(out_dir / "membership_date_ranges.csv", index=False)
@@ -502,12 +592,12 @@ def main() -> None:
     prior_weights.to_csv(out_dir / "weights_prior_timeseries.csv")
     prior_replicated.to_csv(out_dir / "replication_prior_weights.csv")
     prior_contributions.to_csv(out_dir / "return_contributions_prior_weights.csv")
-    weights.to_csv(out_dir / "weights_rnn_inferred.csv")
-    inferred_free_float_market_caps.to_csv(
-        out_dir / "market_caps_rnn_inferred_free_float.csv"
+    weights.to_csv(out_dir / "weights_model_implied.csv")
+    model_implied_effective_exposures.to_csv(
+        out_dir / "effective_exposures_model_fit.csv"
     )
     market_cap_difference_table.to_csv(
-        out_dir / "market_cap_differences_rnn_vs_prior.csv",
+        out_dir / "market_cap_equivalent_exposure_gap.csv",
         index=False,
     )
     returns.to_csv(out_dir / "returns.csv")
@@ -520,14 +610,16 @@ def main() -> None:
     )
     comparison.to_csv(out_dir / "replication_vs_sp500.csv")
     metrics.to_csv(out_dir / "replication_metrics.csv", header=["value"])
+    metrics_by_model.to_csv(out_dir / "replication_metrics_by_model.csv", index=False)
+    anomaly_report.to_csv(out_dir / "anomaly_report.csv", index=False)
     input_usage_report.summary().to_csv(out_dir / "input_usage_report.csv", index=False)
     plot_path = out_dir / "spx_vs_replicated_spx.png"
     write_comparison_plot(comparison, plot_path)
     market_cap_plot_path = out_dir / "largest_market_cap_difference_case.png"
     market_cap_plot_ticker = write_market_cap_difference_plot(
         prior_market_caps_for_weights,
-        inferred_free_float_market_caps,
-        market_cap_differences,
+        model_implied_effective_exposures,
+        market_cap_equivalent_exposure_gap,
         market_cap_plot_path,
         market_cap_prior_label,
     )

@@ -57,7 +57,8 @@ def test_load_local_price_series_pads_monthly_data_to_daily(tmp_path):
         encoding="utf-8",
     )
 
-    prices = load_local_price_series("DAY", "2026-01-30", "2026-02-03", local_dir)
+    with pytest.warns(RuntimeWarning, match="Daily close data is strongly recommended"):
+        prices = load_local_price_series("DAY", "2026-01-30", "2026-02-03", local_dir)
 
     assert prices.to_dict() == {
         pd.Timestamp("2026-01-30"): 10.0,
@@ -66,6 +67,40 @@ def test_load_local_price_series_pads_monthly_data_to_daily(tmp_path):
         pd.Timestamp("2026-02-02"): 12.0,
     }
 
+
+
+def test_load_local_price_series_warns_and_uses_close_when_adj_close_present(tmp_path):
+    local_dir = tmp_path / "prices"
+    local_dir.mkdir()
+    (local_dir / "DAY.csv").write_text(
+        "Date,Close,Adj Close\n"
+        "2026-01-02,10.0,9.5\n"
+        "2026-01-05,11.0,10.4\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="using Close"):
+        prices = load_local_price_series("DAY", "2026-01-02", "2026-01-06", local_dir)
+
+    assert prices.loc[pd.Timestamp("2026-01-02")] == 10.0
+    assert prices.loc[pd.Timestamp("2026-01-05")] == 11.0
+
+
+def test_load_local_price_series_warns_when_only_adj_close_is_available(tmp_path):
+    local_dir = tmp_path / "prices"
+    local_dir.mkdir()
+    (local_dir / "DAY.csv").write_text(
+        "Date,Adj Close\n"
+        "2026-01-02,9.5\n"
+        "2026-01-05,10.4\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="Adjusted prices"):
+        prices = load_local_price_series("DAY", "2026-01-02", "2026-01-06", local_dir)
+
+    assert prices.loc[pd.Timestamp("2026-01-02")] == 9.5
+    assert prices.loc[pd.Timestamp("2026-01-05")] == 10.4
 
 def test_load_local_market_cap_series_pads_monthly_data_to_daily(tmp_path):
     input_dir = tmp_path / "inputs"

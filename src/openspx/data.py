@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -146,10 +147,57 @@ def load_local_price_series(ticker: str, start: str, end: str | None, local_pric
     path = _data_file_path(ticker, local_prices_dir, "price")
     if not path.exists():
         return None
-    series = _series_from_file(path, ticker, ("close", "price", "adjclose"))
-    if series is None:
+
+    data = pd.read_csv(path)
+    if data.empty:
+        return None
+    column_lookup = {column.lower().strip().replace(" ", ""): column for column in data.columns}
+    has_close = "close" in column_lookup
+    has_adj_close = "adjclose" in column_lookup
+    if has_close and has_adj_close:
+        warnings.warn(
+            f"Price file {path} contains both Close and Adj Close; using Close for price-index contribution analysis.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    if has_close:
+        value_column = column_lookup["close"]
+    elif "price" in column_lookup:
+        value_column = column_lookup["price"]
+    elif has_adj_close:
+        value_column = column_lookup["adjclose"]
+        warnings.warn(
+            f"Price file {path} uses Adj Close. Adjusted prices may include dividend adjustments and may not align with a price-index target.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    else:
         raise ValueError(f"Price file {path} must contain Date and Close columns")
-    return _filter_and_fill_daily(series, start, end)
+
+    date_column = _date_column(data)
+    raw_series = pd.Series(
+        pd.to_numeric(data[value_column], errors="coerce").to_numpy(),
+        index=pd.to_datetime(data[date_column], errors="coerce"),
+        name=ticker,
+    )
+    raw_series = raw_series[raw_series.index.notna()].sort_index().dropna()
+    if raw_series.empty:
+        return None
+
+    start_date = pd.Timestamp(start)
+    end_date = pd.Timestamp(end) if end is not None else raw_series.index.max() + pd.Timedelta(days=1)
+    business_days = pd.bdate_range(start_date, end_date - pd.Timedelta(days=1))
+    raw_days = pd.DatetimeIndex(raw_series.index.normalize().unique())
+    missing_business_days = business_days.difference(raw_days)
+    if len(business_days) and len(missing_business_days):
+        warnings.warn(
+            f"Price file {path} is missing {len(missing_business_days)} business-day observation(s) in the requested window; "
+            "forward-filled prices can create zero-return periods and delayed jump returns. Daily close data is strongly recommended.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    return _filter_and_fill_daily(raw_series, start, end)
 
 
 def load_local_market_cap_series(ticker: str, start: str, end: str | None, local_market_caps_dir: str | Path) -> pd.Series | None:

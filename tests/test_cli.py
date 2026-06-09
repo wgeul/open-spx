@@ -2,10 +2,12 @@ import pandas as pd
 
 from openspx import replicate_with_weights
 from openspx.cli import (
+    build_anomaly_report,
     cumulative_top_bleeders,
     cumulative_top_contributors,
     format_missing_ticker_lines,
     ticker_with_largest_average_market_cap_difference,
+    tracking_metrics_by_model,
     write_market_cap_difference_plot,
 )
 
@@ -131,3 +133,45 @@ def test_write_market_cap_difference_plot_writes_png(tmp_path):
     assert path.exists()
     assert path.stat().st_size > 0
 
+
+
+def test_tracking_metrics_by_model_labels_prior_and_ex_post_fit():
+    official = pd.DataFrame(
+        {
+            "sp500_return": [0.01, -0.01],
+            "sp500_index": [101.0, 99.99],
+        },
+        index=pd.to_datetime(["2024-01-02", "2024-01-03"]),
+    )
+    prior = official.copy()
+    prior["replicated_return"] = [0.0, 0.0]
+    prior["replicated_index"] = [100.0, 100.0]
+    prior["tracking_diff"] = prior["replicated_return"] - prior["sp500_return"]
+    fitted = official.copy()
+    fitted["replicated_return"] = [0.01, -0.01]
+    fitted["replicated_index"] = [101.0, 99.99]
+    fitted["tracking_diff"] = 0.0
+
+    result = tracking_metrics_by_model(prior, fitted)
+
+    assert result["model"].tolist() == [
+        "prior_market_cap_weights",
+        "rnn_model_implied_weights",
+    ]
+    assert result["fitted_layer"].tolist() == ["no", "yes_ex_post_in_sample"]
+    assert result.loc[1, "daily_tracking_error"] == 0.0
+
+
+def test_build_anomaly_report_flags_returns_transitions_and_exposure_gaps():
+    index = pd.to_datetime(["2024-01-02", "2024-01-03"])
+    returns = pd.DataFrame({"AAA": [0.20, 0.01]}, index=index)
+    membership = pd.DataFrame({"AAA": [False, True]}, index=index)
+    exposure_gap_pct = pd.DataFrame({"AAA": [1.0, 30.0]}, index=index)
+
+    report = build_anomaly_report(returns, membership, exposure_gap_pct)
+
+    assert set(report["anomaly_type"]) == {
+        "large_single_name_return",
+        "membership_transition",
+        "model_vs_prior_exposure_gap_pct",
+    }

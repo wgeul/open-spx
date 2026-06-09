@@ -2,7 +2,7 @@
 
 This note explains the masked RNN used by `open-spx` to fit implied S&P 500 replication weights from user-provided CSV inputs.
 
-The short version: the RNN is a constrained adjustment layer on top of user-supplied prior weights. It is not an official S&P Dow Jones Indices model, and it does not recover official index weights. It produces one regularized, prior-constrained explanation of the supplied S&P 500 price-index return series.
+The short version: the RNN is a constrained adjustment layer on top of user-supplied prior weights. It is not an official S&P Dow Jones Indices model, and it does not recover official index weights. It produces one regularized, prior-constrained, ex-post explanation of the supplied S&P 500 price-index return series.
 
 ![Masked RNN architecture](assets/rnn_architecture.svg)
 
@@ -39,7 +39,7 @@ but the model fits hundreds of constituent weights:
 weight_1,t, weight_2,t, ..., weight_N,t
 ```
 
-Many different weight vectors can produce nearly identical aggregate index returns. The RNN solution is one regularized solution selected by the prior, the active membership mask, bounded residual adjustments, and temporal smoothness penalties.
+Many different weight vectors can produce nearly identical aggregate index returns. The RNN solution is one regularized solution selected by the prior, the active membership mask, bounded residual adjustments, and temporal smoothness penalties. Because the default fit is trained over the full requested window, model-implied weights on date `t` may be influenced by observations after `t`; they are not weights that would have been known on date `t`.
 
 ## Inputs
 
@@ -159,12 +159,12 @@ The RNN produces weights, not market caps. To make fitted weights comparable wit
 model_implied_exposure_i,t = fitted_weight_i,t * total_active_prior_market_cap_t
 ```
 
-This is written as `market_caps_rnn_inferred_free_float.csv`. The values should be interpreted as model-implied market-cap-equivalent exposures, not recovered free-float market capitalizations.
+This is written as `effective_exposures_model_fit.csv`. The values should be interpreted as model-implied market-cap-equivalent effective exposures, not recovered free-float market capitalizations.
 
 The difference file:
 
 ```text
-market_cap_differences_rnn_vs_prior.csv
+market_cap_equivalent_exposure_gap.csv
 ```
 
 compares this scaled fitted exposure against the supplied prior. Positive values mean the fitted weight is larger than the prior weight after scaling to the same aggregate active market-cap total. Negative values mean it is smaller.
@@ -174,13 +174,15 @@ compares this scaled fitted exposure against the supplied prior. Positive values
 ```text
 weights_prior_timeseries.csv                  prior weights
 replication_prior_weights.csv                 baseline prior replication
-weights_rnn_inferred.csv                      close-of-day fitted effective replication weights
-market_caps_rnn_inferred_free_float.csv       scaled model-implied exposure values
-market_cap_differences_rnn_vs_prior.csv       fitted exposure vs prior diagnostics
+weights_model_implied.csv                     close-of-day fitted effective replication weights
+effective_exposures_model_fit.csv             scaled model-implied exposure values
+market_cap_equivalent_exposure_gap.csv        fitted exposure vs prior diagnostics
 return_contributions.csv                      return-date contribution matrix using prior-close weights
 cumulative_top_return_contributors.csv        largest absolute cumulative contributors
 cumulative_top_return_bleeders.csv            largest negative cumulative contributors
 replication_vs_sp500.csv                      fitted replicated index vs supplied SPX series
-replication_metrics.csv                       tracking metrics
+replication_metrics.csv                       fitted tracking metrics
+replication_metrics_by_model.csv              prior vs model-implied tracking metrics
+anomaly_report.csv                            data-quality and model-gap review flags
 spx_vs_replicated_spx.png                     visual comparison plot
 ```

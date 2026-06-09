@@ -6,7 +6,10 @@ from typing import Iterable
 import pandas as pd
 
 
-DEFAULT_CONSTITUENTS_PATH = "data/constituents.csv"
+DEFAULT_CONSTITUENTS_URL = (
+    "https://raw.githubusercontent.com/fja05680/sp500/master/"
+    "S%26P%20500%20Historical%20Components%20%26%20Changes%2801-17-2026%29.csv"
+)
 
 
 def _split_tickers(value: object) -> list[str]:
