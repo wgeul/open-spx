@@ -21,8 +21,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/wrageul/open-spx"
-Repository = "https://github.com/wrageul/open-spx"
+Homepage = "https://github.com/wgeul/open-spx"
+Repository = "https://github.com/wgeul/open-spx"
 
 [project.scripts]
 open-spx = "openspx.cli:main"
