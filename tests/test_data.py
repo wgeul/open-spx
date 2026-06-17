@@ -69,6 +69,21 @@ def test_load_local_price_series_pads_monthly_data_to_daily(tmp_path):
 
 
 
+
+def test_load_local_price_series_reports_longest_consecutive_business_day_gap(tmp_path):
+    local_dir = tmp_path / "prices"
+    local_dir.mkdir()
+    (local_dir / "DAY.csv").write_text(
+        "Date,Close\n"
+        "2026-01-02,10.0\n"
+        "2026-01-06,11.0\n"
+        "2026-01-08,12.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="longest consecutive missing business-day run of 1"):
+        load_local_price_series("DAY", "2026-01-02", "2026-01-09", local_dir)
+
 def test_load_local_price_series_warns_and_uses_close_when_adj_close_present(tmp_path):
     local_dir = tmp_path / "prices"
     local_dir.mkdir()

@@ -143,6 +143,23 @@ def _filter_and_fill_daily(series: pd.Series, start: str, end: str | None) -> pd
     return None if series.empty else series
 
 
+def _longest_consecutive_business_day_gap(missing_business_days: pd.DatetimeIndex) -> int:
+    if missing_business_days.empty:
+        return 0
+
+    missing = pd.DatetimeIndex(missing_business_days).sort_values()
+    longest = 1
+    current = 1
+    for previous, current_day in zip(missing[:-1], missing[1:]):
+        expected_next = pd.bdate_range(previous, periods=2)[-1]
+        if current_day == expected_next:
+            current += 1
+        else:
+            longest = max(longest, current)
+            current = 1
+    return max(longest, current)
+
+
 def load_local_price_series(ticker: str, start: str, end: str | None, local_prices_dir: str | Path) -> pd.Series | None:
     path = _data_file_path(ticker, local_prices_dir, "price")
     if not path.exists():
@@ -189,10 +206,12 @@ def load_local_price_series(ticker: str, start: str, end: str | None, local_pric
     business_days = pd.bdate_range(start_date, end_date - pd.Timedelta(days=1))
     raw_days = pd.DatetimeIndex(raw_series.index.normalize().unique())
     missing_business_days = business_days.difference(raw_days)
-    if len(business_days) and len(missing_business_days):
+    longest_gap = _longest_consecutive_business_day_gap(missing_business_days)
+    if len(business_days) and longest_gap:
         warnings.warn(
-            f"Price file {path} is missing {len(missing_business_days)} business-day observation(s) in the requested window; "
-            "forward-filled prices can create zero-return periods and delayed jump returns. Daily close data is strongly recommended.",
+            f"Price file {path} has a longest consecutive missing business-day run of {longest_gap} observation(s) "
+            "in the requested window; forward-filled prices can create zero-return periods and delayed jump returns. "
+            "Daily close data is strongly recommended.",
             RuntimeWarning,
             stacklevel=2,
         )
