@@ -83,7 +83,7 @@ Largest cumulative negative contributors from `data/cumulative_top_return_bleede
 ## Installation
 
 ```bash
-git clone https://github.com/wrageul/open-spx.git
+git clone https://github.com/wgeul/open-spx.git
 cd open-spx
 pip install -r requirements.txt
 pip install -e . --no-deps
