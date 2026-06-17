@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import matplotlib
@@ -160,12 +161,16 @@ def write_market_cap_difference_plot(
     return str(ticker)
 
 
+def compound_returns(returns):
+    return (1.0 + returns.fillna(0.0)).cumprod() - 1.0
+
+
 def cumulative_top_contributors(contributions, top_n: int = 25):
-    """Return cumulative return-date contributions for the most important names."""
+    """Return compounded return-date contributions for the most important names."""
     if top_n <= 0:
         raise ValueError("top_n must be positive")
 
-    cumulative = contributions.fillna(0.0).cumsum()
+    cumulative = compound_returns(contributions)
     if cumulative.empty:
         raise ValueError("contributions must not be empty")
 
@@ -176,11 +181,11 @@ def cumulative_top_contributors(contributions, top_n: int = 25):
 
 
 def cumulative_top_bleeders(contributions, top_n: int = 25):
-    """Return cumulative return-date contributions for the largest detractors."""
+    """Return compounded return-date contributions for the largest detractors."""
     if top_n <= 0:
         raise ValueError("top_n must be positive")
 
-    cumulative = contributions.fillna(0.0).cumsum()
+    cumulative = compound_returns(contributions)
     if cumulative.empty:
         raise ValueError("contributions must not be empty")
 
@@ -191,12 +196,12 @@ def cumulative_top_bleeders(contributions, top_n: int = 25):
 
 
 def cumulative_contributor_table(contributions, tickers):
-    cumulative = contributions.fillna(0.0).cumsum()
+    cumulative = compound_returns(contributions)
     result = cumulative.loc[:, tickers].copy()
     result.insert(
         0,
         "Total Replicated Return Contribution",
-        contributions.fillna(0.0).sum(axis=1).cumsum(),
+        compound_returns(contributions.fillna(0.0).sum(axis=1)),
     )
     return result
 
@@ -275,6 +280,168 @@ def build_anomaly_report(
     return pd.DataFrame(records, columns=columns).sort_values(
         ["Date", "Ticker", "anomaly_type"]
     )
+
+
+def parse_synthetic_exclusions(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    tickers = []
+    for item in value.split(","):
+        ticker = item.strip()
+        if ticker:
+            tickers.append(ticker)
+    return tickers
+
+
+def ticker_match_key(ticker: str) -> str:
+    return "".join(ch for ch in str(ticker).upper() if ch.isalnum())
+
+
+def resolve_excluded_tickers(
+    excluded_tickers: list[str],
+    available_tickers,
+) -> tuple[list[str], list[str]]:
+    by_key: dict[str, list[str]] = {}
+    for ticker in available_tickers:
+        by_key.setdefault(ticker_match_key(ticker), []).append(ticker)
+
+    matched = []
+    missing = []
+    for requested in excluded_tickers:
+        matches = by_key.get(ticker_match_key(requested), [])
+        if matches:
+            matched.extend(matches)
+        else:
+            missing.append(requested)
+
+    return sorted(set(matched)), missing
+
+
+def synthetic_output_dir(base_out_dir: Path, name: str) -> Path:
+    clean_name = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in name)
+    clean_name = clean_name.strip("_") or "scenario"
+    return base_out_dir / f"synthetic_{clean_name}"
+
+
+def slice_by_date(frame: pd.DataFrame | pd.Series, start: str | None, end: str | None):
+    result = frame
+    if start is not None:
+        result = result.loc[result.index >= pd.Timestamp(start)]
+    if end is not None:
+        result = result.loc[result.index <= pd.Timestamp(end)]
+    return result
+
+
+def rebalance_weights_excluding_tickers(
+    weights: pd.DataFrame,
+    excluded_tickers: list[str],
+    tolerance: float = 1e-6,
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    matched, missing = resolve_excluded_tickers(excluded_tickers, weights.columns)
+    adjusted = weights.drop(columns=matched, errors="ignore").astype("float64")
+
+    remaining_weight_sum = adjusted.sum(axis=1)
+    zero_rows = remaining_weight_sum <= tolerance
+    if zero_rows.any():
+        first_date = zero_rows[zero_rows].index[0]
+        raise ValueError(
+            "Synthetic exclusion leaves no remaining constituent weight "
+            f"on {first_date:%Y-%m-%d}."
+        )
+
+    adjusted = adjusted.div(remaining_weight_sum, axis=0).fillna(0.0)
+    row_sums = adjusted.sum(axis=1)
+    invalid_rows = (row_sums - 1.0).abs() > tolerance
+    if invalid_rows.any():
+        first_date = invalid_rows[invalid_rows].index[0]
+        raise ValueError(
+            "Synthetic adjusted weights do not sum to 1 within tolerance "
+            f"on {first_date:%Y-%m-%d}."
+        )
+
+    return adjusted, matched, missing
+
+
+def write_synthetic_outputs(
+    out_dir: Path,
+    name: str,
+    returns: pd.DataFrame,
+    weights: pd.DataFrame,
+    official: pd.DataFrame,
+    excluded_tickers: list[str],
+    start: str | None,
+    end: str | None,
+    top_contributors: int,
+    top_bleeders: int,
+) -> Path:
+    synthetic_dir = synthetic_output_dir(out_dir, name)
+    synthetic_dir.mkdir(parents=True, exist_ok=True)
+
+    synthetic_weights = slice_by_date(weights, start, end)
+    if synthetic_weights.empty:
+        raise ValueError("Synthetic scenario has no weight rows in the requested window.")
+
+    synthetic_weights, matched_exclusions, missing_exclusions = (
+        rebalance_weights_excluding_tickers(synthetic_weights, excluded_tickers)
+    )
+    for ticker in missing_exclusions:
+        warnings.warn(
+            f"Synthetic exclusion ticker {ticker!r} was not found in model-implied weights.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    synthetic_returns = slice_by_date(
+        returns.reindex(columns=synthetic_weights.columns),
+        start,
+        end,
+    )
+    synthetic_official = slice_by_date(official, start, end)
+    if synthetic_returns.empty:
+        raise ValueError("Synthetic scenario has no return rows in the requested window.")
+
+    replicated, contributions = replicate_with_weights(
+        synthetic_returns,
+        synthetic_weights,
+        base_index=synthetic_official["sp500_index"],
+    )
+    comparison = replicated.join(synthetic_official, how="inner")
+    comparison["tracking_diff"] = (
+        comparison["replicated_return"] - comparison["sp500_return"]
+    )
+    metrics = tracking_metrics(comparison)
+
+    synthetic_weights.to_csv(synthetic_dir / "weights_model_implied.csv")
+    synthetic_returns.to_csv(synthetic_dir / "returns.csv")
+    contributions.to_csv(synthetic_dir / "return_contributions.csv")
+    comparison.to_csv(synthetic_dir / "replication_vs_sp500.csv")
+    replicated.rename(
+        columns={
+            "replicated_return": "synthetic_return",
+            "replicated_index": "synthetic_index",
+        }
+    ).to_csv(synthetic_dir / "synthetic_index.csv")
+    metrics.to_csv(synthetic_dir / "replication_metrics.csv", header=["value"])
+    cumulative_top_contributors(
+        contributions,
+        top_n=top_contributors,
+    ).to_csv(synthetic_dir / "cumulative_top_return_contributors.csv")
+    cumulative_top_bleeders(
+        contributions,
+        top_n=top_bleeders,
+    ).to_csv(synthetic_dir / "cumulative_top_return_bleeders.csv")
+    matched_keys = {ticker_match_key(match) for match in matched_exclusions}
+    pd.DataFrame(
+        {
+            "requested_ticker": excluded_tickers,
+            "matched": [
+                ticker_match_key(ticker) in matched_keys for ticker in excluded_tickers
+            ],
+        }
+    ).to_csv(synthetic_dir / "excluded_tickers.csv", index=False)
+    write_comparison_plot(comparison, synthetic_dir / "spx_vs_replicated_spx.png")
+
+    return synthetic_dir
 
 
 def main() -> None:
@@ -358,6 +525,19 @@ def main() -> None:
             "Number of most negative cumulative return contributors to include "
             "in cumulative_top_return_bleeders.csv."
         ),
+    )
+    parser.add_argument(
+        "--synthetic-exclude",
+        default=None,
+        help=(
+            "Optional comma-separated tickers to remove from the fitted weights, "
+            "then rebalance the remaining weights into a synthetic replicated index."
+        ),
+    )
+    parser.add_argument(
+        "--synthetic-name",
+        default="exclusion",
+        help="Name suffix for the synthetic output folder under --out.",
     )
     parser.add_argument(
         "--index",
@@ -624,6 +804,25 @@ def main() -> None:
         market_cap_prior_label,
     )
 
+    synthetic_dir = None
+    synthetic_exclusions = parse_synthetic_exclusions(args.synthetic_exclude)
+    if synthetic_exclusions:
+        try:
+            synthetic_dir = write_synthetic_outputs(
+                out_dir=out_dir,
+                name=args.synthetic_name,
+                returns=returns,
+                weights=weights,
+                official=official,
+                excluded_tickers=synthetic_exclusions,
+                start=args.start,
+                end=args.end,
+                top_contributors=args.top_contributors,
+                top_bleeders=args.top_bleeders,
+            )
+        except ValueError as exc:
+            parser.exit(1, f"{exc}\n")
+
     if show_progress:
         tqdm.write("Latest comparison rows:")
         tqdm.write(comparison.tail().to_string())
@@ -636,10 +835,14 @@ def main() -> None:
             "Largest market-cap difference plot written to "
             f"{market_cap_plot_path} for {market_cap_plot_ticker}"
         )
+        if synthetic_dir is not None:
+            tqdm.write(f"Synthetic exclusion outputs written to {synthetic_dir}")
     else:
         print(comparison.tail())
         print(metrics.to_frame("value"))
         print(format_input_usage_report(input_usage_report))
+        if synthetic_dir is not None:
+            print(f"Synthetic exclusion outputs written to {synthetic_dir}")
 
 
 if __name__ == "__main__":
